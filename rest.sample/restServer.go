@@ -7,10 +7,19 @@ import (
 	"net/http"
 	//	"os"
 	//	"runtime"
-	"time"
+	//	"time"
 
+	"database/sql"
+	//数据库连接池
+	"github.com/lib/pq"
+	_ "github.com/lib/pq"
+
+	//日志
 	l4g "github.com/alecthomas/log4go"
+	//redis驱动
 	"github.com/garyburd/redigo/redis"
+	//平滑重启和安全关闭服务
+	"github.com/tabalt/gracehttp"
 )
 
 var (
@@ -37,8 +46,8 @@ func main() {
 
 	startServer()
 
-	defer l4g.Close()
-	//	defer db.Close()
+	defer releaseResource()
+
 }
 
 func login(w http.ResponseWriter, req *http.Request) {
@@ -67,11 +76,20 @@ func getResult(cd int, msg string) string {
 
 func startServer() {
 
-	addr := "127.0.0.1:12345"
+	//	addr := "127.0.0.1:12345"
+
+	// test
+	//http://192.168.0.10:12345/login?userName=ccc&pwd=rrr
+	//kill -SIGUSR2 $pid 	平滑重启
+	//kill $pid				关闭服务
+
 	http.HandleFunc("/login", login)
 	l4g.Log(l4g.INFO, "", "Server start.")
 
-	go ListenAndServe(addr, nil, time.Second*10)
+	err := gracehttp.ListenAndServe(":12345", nil)
+	if err != nil {
+		l4g.Log(l4g.INFO, "", "Server stop")
+	}
 
 	//	http.HandleFunc("/login", login)
 
@@ -84,11 +102,16 @@ func startServer() {
 
 }
 
-func ListenAndServe(addr string, handler http.Handler, timeout time.Duration) error {
-	server := &http.Server{
-		Addr:        addr,
-		Handler:     handler,
-		ReadTimeout: timeout,
-	}
-	return server.ListenAndServe()
+func releaseResource() {
+	l4g.Close()
+	db.Close()
 }
+
+//func ListenAndServe(addr string, handler http.Handler, timeout time.Duration) error {
+//	server := &gracehttp.Server{
+//		Addr:        addr,
+//		Handler:     handler,
+//		ReadTimeout: timeout,
+//	}
+//	return server.ListenAndServe()
+//}
