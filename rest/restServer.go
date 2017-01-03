@@ -1,8 +1,11 @@
-package main
+// 包说明见doc.go
+// 作者：laser.wang
+
+package rest
 
 import (
 	"encoding/json"
-	"fmt"
+	//	"fmt"
 	"io"
 	"net/http"
 	//	"os"
@@ -23,18 +26,19 @@ import (
 )
 
 var (
-	RedisClient *redis.Pool
-	REDIS_HOST  string
-	REDIS_DB    int
+	redisClient *redis.Pool
+	redis_host  string
+	redis_db    int
 
 	restDB *sql.DB
 )
 
-type StructResult struct {
+type structResult struct {
 	Cd  int
 	Msg string
 }
 
+//初始化，包括日志、数据库等
 func init() {
 
 	var err error
@@ -42,24 +46,26 @@ func init() {
 	l4g.AddFilter("stdout", l4g.DEBUG, l4g.NewConsoleLogWriter())
 	l4g.AddFilter("file", l4g.DEBUG, l4g.NewFileLogWriter("rest.log", false))
 	restDB, err = sql.Open("postgres", "postgres://avcp_work:avcp_work@192.168.0.10/avcp_work?sslmode=disable")
-	checkErr(err)
+	checkErr(err, check_flag_exit)
 
 }
 
-func main() {
+// StartServer 启动服务入口
+func StartServer() {
 
 	// 连接数
 	restDB.SetMaxOpenConns(100) // 最大连接数
 	restDB.SetMaxIdleConns(20)  // 最大空闲数
 
-	startServer()
+	startHttp()
 	defer releaseResource()
 }
 
+//登陆功能
 func login(w http.ResponseWriter, req *http.Request) {
 
-	//	userCode := req.FormValue("userCode")
-	//	pwd := req.FormValue("pwd")
+	userCode := req.FormValue("userCode")
+	pwd := req.FormValue("pwd")
 	//	if userCode == "" || pwd == "" {
 	//		io.WriteString(w, getResult(500, "Login is failed,please use correct username or password."))
 	//		l4g.Log(l4g.INFO, "", "Login is failed,please use correct username or password.")
@@ -71,16 +77,17 @@ func login(w http.ResponseWriter, req *http.Request) {
 
 	var err error
 	//查询数据
-	//	rows, err := restDB.Query("SELECT user_name FROM xx_user where user_code = $1 and pwd = $2", userCode, pwd)
+	rows, err := restDB.Query("SELECT user_name FROM xx_user where user_code = $1 and pwd = $2", userCode, pwd)
 
-	rows, err := restDB.Query("SELECT user_name FROM xx_user")
+	//	rows, err := restDB.Query("SELECT user_name FROM xx_user")
 
-	checkErr(err)
+	checkErr(err, check_flag_log)
+
 	if rows.Next() == true {
 		var username string
 		err = rows.Scan(&username)
-		checkErr(err)
-		fmt.Println(username)
+		checkErr(err, check_flag_log)
+
 		io.WriteString(w, getResult(200, username))
 		l4g.Log(l4g.INFO, "", "Login is successful."+getResult(200, username))
 	} else {
@@ -100,8 +107,9 @@ func login(w http.ResponseWriter, req *http.Request) {
 
 }
 
+//把接口返回值封装成json串
 func getResult(cd int, msg string) string {
-	rslt := StructResult{
+	rslt := structResult{
 		Cd:  cd,
 		Msg: msg,
 	}
@@ -109,7 +117,8 @@ func getResult(cd int, msg string) string {
 	return string(ret)
 }
 
-func startServer() {
+// startHttp 启动http服务
+func startHttp() {
 
 	//	addr := "127.0.0.1:12345"
 
@@ -139,6 +148,7 @@ func startServer() {
 
 }
 
+//释放日志文件、数据库连接等资源
 func releaseResource() {
 	l4g.Close()
 	restDB.Close()
@@ -153,9 +163,20 @@ func releaseResource() {
 //	return server.ListenAndServe()
 //}
 
-func checkErr(err error) {
+//错误处理函数，程序中错误分2种，一种需要终止程序，一种仅仅是记录错误日志
+//flag:  1:exit  2:log only
+func checkErr(err error, flag int) {
+
 	if err != nil {
-		l4g.Log(l4g.ERROR, "", err.Error())
-		panic(err)
+		switch flag {
+		case check_flag_exit:
+			l4g.Log(l4g.ERROR, "", err.Error())
+			panic(err)
+		case check_flag_log:
+			l4g.Log(l4g.ERROR, "", err.Error())
+		default:
+			l4g.Log(l4g.ERROR, "", err.Error())
+		}
 	}
+
 }
