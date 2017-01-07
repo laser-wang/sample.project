@@ -17,6 +17,8 @@ import (
 	//	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 
+	"laserTools"
+
 	//日志
 	l4g "github.com/alecthomas/log4go"
 	//redis驱动
@@ -90,19 +92,21 @@ func StartServer() {
 	defer releaseResource()
 }
 
-//登陆功能
+// login 用户登陆，登陆后会生成token，返回给客户端，下次访问非login接口时header需要包含正确的token.
+// 如果token不正确，则不会返回正确结果
 func login(w http.ResponseWriter, req *http.Request) {
+
+	//	loginToken := req.Header.Get("loginToken")
+	//	l4g.Log(l4g.INFO, "", "token:"+loginToken)
 
 	userCode := req.FormValue("userCode")
 	pwd := req.FormValue("pwd")
-	//	if userCode == "" || pwd == "" {
-	//		io.WriteString(w, getResult(500, "Login is failed,please use correct username or password."))
-	//		l4g.Log(l4g.INFO, "", "Login is failed,please use correct username or password.")
-	//	} else {
-	//		io.WriteString(w, getResult(200, userName))
-	//		l4g.Log(l4g.INFO, "", "Login is successful."+getResult(200, userName))
 
-	//	}
+	if userCode == "" || pwd == "" {
+		io.WriteString(w, getResult(500, "Login is failed,please use correct username or password."))
+		l4g.Log(l4g.INFO, "", "Login is failed,please use correct username or password.")
+		return
+	}
 
 	var err error
 	//查询数据
@@ -117,21 +121,20 @@ func login(w http.ResponseWriter, req *http.Request) {
 		err = rows.Scan(&username)
 		checkErr(err, check_flag_log)
 
-		io.WriteString(w, getResult(200, username))
+		loginToken := laserTools.GetToken()
+		redisConn := gRedisClient.Get()
+
+		redisConn.Do("SET", userCode, loginToken)
+		redisConn.Do("EXPIRE", userCode, 30)
+
+		defer redisConn.Close()
+		io.WriteString(w, getResult(200, loginToken))
 		l4g.Log(l4g.INFO, "", "Login is successful."+getResult(200, username))
 	} else {
 		io.WriteString(w, getResult(500, "Login is failed,please use correct username or password."))
 		l4g.Log(l4g.INFO, "", "Login is failed,please use correct username or password.")
 	}
 
-	//	for rows.Next() {
-	//		var username string
-	//		err = rows.Scan(&usernamed)
-	//		checkErr(err)
-	//		fmt.Println(username)
-	//		io.WriteString(w, getResult(200, username))
-	//		l4g.Log(l4g.INFO, "", "Login is successful."+getResult(200, username))
-	//	}
 	defer rows.Close()
 
 }
