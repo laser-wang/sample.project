@@ -10,15 +10,15 @@ import (
 	"net/http"
 	//	"os"
 	//	"runtime"
+	"database/sql"
+	"strings"
 	"time"
 
-	"database/sql"
 	//数据库连接池
 	//	"github.com/lib/pq"
 	_ "github.com/lib/pq"
-
+	// 一些自己写的通用函数
 	"laserTools"
-
 	//日志
 	l4g "github.com/alecthomas/log4go"
 	//redis驱动
@@ -57,7 +57,7 @@ func init() {
 	gRestDB.SetMaxOpenConns(2000)
 	// 默认为0
 	gRestDB.SetMaxIdleConns(100)
-	checkErr(err, check_flag_exit)
+	checkErr(err, checkFlagExit)
 
 	// 初始化redis
 	gRedisHost = "192.168.0.10:6379"
@@ -93,53 +93,74 @@ func StartServer() {
 }
 
 // login 用户登陆，登陆后会生成token，返回给客户端，下次访问非login接口时header需要包含正确的token.
-// 如果token不正确，则不会返回正确结果
+// 如果token不正确，则不会返回正确结果 (鉴权)
 func login(w http.ResponseWriter, req *http.Request) {
-
-	//	loginToken := req.Header.Get("loginToken")
-	//	l4g.Log(l4g.INFO, "", "token:"+loginToken)
 
 	userCode := req.FormValue("userCode")
 	pwd := req.FormValue("pwd")
 
 	if userCode == "" || pwd == "" {
-		io.WriteString(w, getResult(500, "Login is failed,please use correct username or password."))
-		l4g.Log(l4g.INFO, "", "Login is failed,please use correct username or password.")
+		io.WriteString(w, getResult(retCodeFailed, msgLoginFailed))
+		l4g.Log(l4g.INFO, "", msgLoginFailed)
 		return
 	}
 
 	var err error
 	//查询数据
 	rows, err := gRestDB.Query("SELECT user_name FROM xx_user where user_code = $1 and pwd = $2", userCode, pwd)
-
-	//	rows, err := gRestDB.Query("SELECT user_name FROM xx_user")
-
-	checkErr(err, check_flag_log)
+	checkErr(err, checkFlagLog)
 
 	if rows.Next() == true {
 		var username string
 		err = rows.Scan(&username)
-		checkErr(err, check_flag_log)
+		checkErr(err, checkFlagLog)
 
+		// 生成token
 		loginToken := laserTools.GetToken()
 		redisConn := gRedisClient.Get()
-
+		// 保存token
 		redisConn.Do("SET", userCode, loginToken)
+		// 设置token有效时长为30秒
 		redisConn.Do("EXPIRE", userCode, 30)
-
 		defer redisConn.Close()
-		io.WriteString(w, getResult(200, loginToken))
-		l4g.Log(l4g.INFO, "", "Login is successful."+getResult(200, username))
+
+		// 返回token
+		//		io.WriteString(w, getResult(retCodeSuccess, loginToken))
+		//		l4g.Log(l4g.INFO, "", msgLoginSuccess+getResult(retCodeSuccess, username))
+
+		toResponse(&w, retCodeSuccess, userCode+splitChar+loginToken, true)
+		return
 	} else {
-		io.WriteString(w, getResult(500, "Login is failed,please use correct username or password."))
-		l4g.Log(l4g.INFO, "", "Login is failed,please use correct username or password.")
+		//		io.WriteString(w, getResult(retCodeFailed, msgLoginFailed))
+		//		l4g.Log(l4g.INFO, "", msgLoginFailed)
+		toResponse(&w, retCodeFailed, msgLoginFailed, true)
+		return
 	}
 
 	defer rows.Close()
 
 }
 
-//把接口返回值封装成json串
+// getContentSammple 登陆之外的接口例子，需要用到token，header中传入了正确的token才能返回正确接口，
+// 否则返回提示：登陆已过期请重新登陆
+func getContentSammple(w http.ResponseWriter, req *http.Request) {
+	loginToken := req.Header.Get("loginToken")
+	l4g.Log(l4g.INFO, "", "token:"+loginToken)
+	if loginToken == "" {
+		toResponse(&w, retCodeLoginTokenInvalid, msgLoginTokenInvalid, true)
+		return
+	} else {
+		// 验证token有效性
+		if checkToken(loginToken) == true {
+			toResponse(&w, retCodeSuccess, "getContentSammple", true)
+		} else {
+			toResponse(&w, retCodeLoginTokenInvalid, msgLoginTokenInvalid, true)
+		}
+		return
+	}
+}
+
+// getResult 把接口返回值封装成json串
 func getResult(cd int, msg string) string {
 	rslt := structResult{
 		Cd:  cd,
@@ -147,6 +168,33 @@ func getResult(cd int, msg string) string {
 	}
 	ret, _ := json.Marshal(rslt)
 	return string(ret)
+}
+
+// toResponse 生成返回结果
+func toResponse(w *http.ResponseWriter, code int, msg string, logFlag bool) {
+	io.WriteString(*w, getResult(code, msg))
+	if logFlag == true {
+		l4g.Log(l4g.INFO, "", msg)
+	}
+
+}
+
+// checkToken 验证token有效性
+func checkToken(loginToken string) bool {
+	redisConn := gRedisClient.Get()
+	ret := strings.Split(loginToken, splitChar)
+
+	redisToken, _ := redis.String(redisConn.Do("GET", ret[0]))
+	if redisToken == ret[1] {
+		// 如果token正确，则刷新有效时长
+		redisConn.Do("EXPIRE", ret[0], 30)
+		return true
+	} else {
+		return false
+	}
+
+	defer redisConn.Close()
+	return false
 }
 
 // startHttp 启动http服务
@@ -160,23 +208,15 @@ func startHttp() {
 	//kill $pid				关闭服务
 
 	http.HandleFunc("/login", login)
+	http.HandleFunc("/getContentSammple", getContentSammple)
 	l4g.Log(l4g.INFO, "", "Server start.")
 
 	err := gracehttp.ListenAndServe(":12345", nil)
 	if err != nil {
-
+		l4g.Log(l4g.INFO, "", err.Error())
 	}
 
 	l4g.Log(l4g.INFO, "", "Server stop")
-
-	//	http.HandleFunc("/login", login)
-
-	//	l4g.Log(l4g.INFO, "", "Server start.")
-
-	//	err := http.ListenAndServe(":12345", nil)
-	//	if err != nil {
-	//		l4g.Log(l4g.ERROR, "startServer", "Failed to start service."+err.Error())
-	//	}
 
 }
 
@@ -202,10 +242,10 @@ func checkErr(err error, flag int) {
 
 	if err != nil {
 		switch flag {
-		case check_flag_exit:
+		case checkFlagExit:
 			l4g.Log(l4g.ERROR, "", err.Error())
 			panic(err)
-		case check_flag_log:
+		case checkFlagLog:
 			l4g.Log(l4g.ERROR, "", err.Error())
 		default:
 			l4g.Log(l4g.ERROR, "", err.Error())
@@ -213,8 +253,3 @@ func checkErr(err error, flag int) {
 	}
 
 }
-
-// setToken 登陆后设置token
-//func setToken(String userCode) {
-
-//}
